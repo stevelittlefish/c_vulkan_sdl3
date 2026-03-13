@@ -97,10 +97,13 @@ VkCommandPool command_pool = {0};
 const uint32_t command_buffers_count = MAX_FRAMES_IN_FLIGHT;
 VkCommandBuffer command_buffers[MAX_FRAMES_IN_FLIGHT] = {0};
 
-const uint32_t image_available_semaphores_count = MAX_FRAMES_IN_FLIGHT;
-VkSemaphore image_available_semaphores[MAX_FRAMES_IN_FLIGHT] = {0};
-const uint32_t render_finished_semaphores_count = MAX_FRAMES_IN_FLIGHT;
-VkSemaphore render_finished_semaphores[MAX_FRAMES_IN_FLIGHT] = {0};
+// Semaphores: need enough to avoid reuse before presentation completes
+// Use max of MAX_FRAMES_IN_FLIGHT and swapchain image count
+uint32_t semaphores_count = 0;
+VkSemaphore* image_available_semaphores = NULL;
+VkSemaphore* render_finished_semaphores = NULL;
+
+// Per-frame fences
 const uint32_t in_flight_fences_count = MAX_FRAMES_IN_FLIGHT;
 VkFence in_flight_fences[MAX_FRAMES_IN_FLIGHT] = {0};
 
@@ -512,10 +515,44 @@ void create_swap_chain() {
 	free_swap_chain_support(&swap_chain_support);
 
 	printf(" Swap chain created\n");
+	
+	// ----- Create semaphores -----
+	// We need enough semaphores to avoid reuse while images are in flight
+	// Use the maximum of MAX_FRAMES_IN_FLIGHT and swapchain image count
+	semaphores_count = swap_chain_images_count > MAX_FRAMES_IN_FLIGHT ? swap_chain_images_count : MAX_FRAMES_IN_FLIGHT;
+	
+	image_available_semaphores = malloc(sizeof(VkSemaphore) * semaphores_count);
+	render_finished_semaphores = malloc(sizeof(VkSemaphore) * semaphores_count);
+	
+	VkSemaphoreCreateInfo semaphore_info = {0};
+	semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	
+	for (size_t i = 0; i < semaphores_count; i++) {
+		if (vkCreateSemaphore(device, &semaphore_info, NULL, &image_available_semaphores[i]) != VK_SUCCESS ||
+				vkCreateSemaphore(device, &semaphore_info, NULL, &render_finished_semaphores[i]) != VK_SUCCESS) {
+			fprintf(stderr, "failed to create semaphores %zu!\n", i);
+			exit(1);
+		}
+	}
+	
+	printf(" Created %d semaphore pairs\n", semaphores_count);
 }
 
 void cleanup_swap_chain(void) {
 	printf("Cleaning up swap chain\n");
+	
+	// Destroy semaphores
+	for (size_t i = 0; i < semaphores_count; i++) {
+		vkDestroySemaphore(device, image_available_semaphores[i], NULL);
+		vkDestroySemaphore(device, render_finished_semaphores[i], NULL);
+	}
+	
+	free(image_available_semaphores);
+	free(render_finished_semaphores);
+	image_available_semaphores = NULL;
+	render_finished_semaphores = NULL;
+	semaphores_count = 0;
+	
 	cleanup_framebuffers();
 	cleanup_image_views();
 	vkDestroySwapchainKHR(device, swap_chain, NULL);
@@ -1146,19 +1183,14 @@ void init_vulkan(void) {
 		exit(1);
 	}
 
-	// ----- Create the semaphores -----
-	VkSemaphoreCreateInfo semaphore_info = {0};
-	semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
+	// ----- Create the fences (per-frame synchronization) -----
 	VkFenceCreateInfo fence_info = {0};
 	fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-		if (vkCreateSemaphore(device, &semaphore_info, NULL, &image_available_semaphores[i]) != VK_SUCCESS ||
-				vkCreateSemaphore(device, &semaphore_info, NULL, &render_finished_semaphores[i]) != VK_SUCCESS ||
-				vkCreateFence(device, &fence_info, NULL, &in_flight_fences[i]) != VK_SUCCESS) {
-			fprintf(stderr, "failed to create synchronization objects for a frame!\n");
+		if (vkCreateFence(device, &fence_info, NULL, &in_flight_fences[i]) != VK_SUCCESS) {
+			fprintf(stderr, "failed to create fence for frame %zu!\n", i);
 			exit(1);
 		}
 	}
@@ -1231,7 +1263,9 @@ void record_command_buffer(VkCommandBuffer command_buffer, uint32_t image_index)
 void draw_frame() {
 	vkWaitForFences(device, 1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
 
-	uint32_t image_index;
+	uint32_t image_index = 0;
+	// Use per-frame semaphore (cycling with current_frame) for acquire
+	// We can't use image_index here because it hasn't been set yet!
 	VkResult result = vkAcquireNextImageKHR(device, swap_chain, UINT64_MAX, image_available_semaphores[current_frame], VK_NULL_HANDLE, &image_index);
 
 	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -1281,6 +1315,7 @@ void draw_frame() {
 	VkSubmitInfo submit_info = {0};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	
+	// Wait on the per-frame semaphore that was signaled by vkAcquireNextImageKHR
 	VkSemaphore wait_semaphores[] = {image_available_semaphores[current_frame]};
 	VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 	submit_info.waitSemaphoreCount = 1;
@@ -1290,7 +1325,8 @@ void draw_frame() {
 	submit_info.commandBufferCount = 1;
 	submit_info.pCommandBuffers = &command_buffers[current_frame];
 
-	VkSemaphore signal_semaphores[] = {render_finished_semaphores[current_frame]};
+	// Signal the per-swapchain-image semaphore for this specific image
+	VkSemaphore signal_semaphores[] = {render_finished_semaphores[image_index]};
 	submit_info.signalSemaphoreCount = 1;
 	submit_info.pSignalSemaphores = signal_semaphores;
 
@@ -1329,6 +1365,7 @@ void draw_frame() {
 void cleanup_vulkan(void) {
 	printf("Cleaning up Vulkan\n");
 
+	// Cleanup swap chain (includes per-swapchain-image semaphores)
 	cleanup_swap_chain();
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1351,9 +1388,8 @@ void cleanup_vulkan(void) {
 
 	vkDestroyRenderPass(device, render_pass, NULL);
 
+	// Destroy per-frame fences
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-		vkDestroySemaphore(device, render_finished_semaphores[i], NULL);
-		vkDestroySemaphore(device, image_available_semaphores[i], NULL);
 		vkDestroyFence(device, in_flight_fences[i], NULL);
 	}
 
