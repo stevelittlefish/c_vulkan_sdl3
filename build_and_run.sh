@@ -1,3 +1,3 @@
 #!/bin/bash
 
-./build.sh && ./dist/main
+./build.sh --validation && ./dist/main

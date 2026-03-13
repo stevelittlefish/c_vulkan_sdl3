@@ -7,14 +7,23 @@ DATE=$(date +%Y_%m_%d)
 APPIMAGE_NAME="vulkan_sdl3_app-${DATE}-x86_64.AppImage"
 
 echo "Creating AppImage for Vulkan SDL3 app..."
+echo ""
+echo "IMPORTANT: For maximum portability, build on an older system (e.g., Ubuntu 20.04)"
+echo "or use a container with older GLIBC to avoid version conflicts on target systems."
+echo ""
 
 # Compile shaders
 echo "Compiling shaders..."
 ./compile_shaders.sh
 
-# Build the application
-echo "Building application..."
-./build.sh
+# Build the application with release optimizations (validation layers disabled)
+echo "Building application (Release mode without validation layers)..."
+./update_file_list.sh
+mkdir -p build
+cd build
+cmake -D CMAKE_BUILD_TYPE=Release -D ENABLE_VALIDATION_LAYERS=OFF .. || { echo "ERROR: cmake failed"; cd ..; exit 1; }
+make || { echo "ERROR: make failed"; cd ..; exit 2; }
+cd ..
 
 # Check if build was successful
 if [ ! -f "dist/main" ]; then
@@ -40,7 +49,7 @@ cp -r dist/shaders "$APPDIR/usr/bin/"
 
 # Copy required libraries
 echo "Bundling dependencies..."
-# Helper function to copy library from multiple possible locations
+# Helper function to copy library and its dependencies
 copy_lib() {
     local lib="$1"
     # Try /usr/lib first, then /lib/x86_64-linux-gnu
@@ -60,9 +69,15 @@ copy_lib "libxkbcommon.so.0"
 copy_lib "libdecor-0.so.0"
 copy_lib "libwayland-client.so.0"
 copy_lib "libwayland-cursor.so.0"
+copy_lib "libm.so.6"
+copy_lib "libstdc++.so.6"
+copy_lib "libgcc_s.so.1"
 
 # Note: Vulkan libraries are typically not bundled as they should come from the driver
 echo "  Note: Vulkan libraries not bundled (should use system drivers)"
+echo ""
+echo "Checking GLIBC version used by binary..."
+objdump -T "$APPDIR/usr/bin/vulkan_app" | grep GLIBC | sed 's/.*GLIBC_/GLIBC_/' | sort -V | uniq | tail -1
 
 # Create a simple icon (placeholder - ideally you'd have a proper icon)
 echo "Creating placeholder icon..."
@@ -130,9 +145,16 @@ echo "Copying AppImage to dist..."
 cp "build/$APPIMAGE_NAME" "dist/$APPIMAGE_NAME"
 
 echo ""
+echo "========================================"
 echo "AppImage created successfully!"
 echo "Location: dist/$APPIMAGE_NAME"
+echo "========================================"
+echo ""
+echo "IMPORTANT NOTES:"
+echo "1. This AppImage requires Vulkan drivers on the target system"
+echo "2. If you get GLIBC version errors on older systems:"
+echo "   - Build the AppImage on an older Linux distribution (e.g., Ubuntu 20.04)"
+echo "   - Or use a Docker container with an older base image"
+echo "   - Example: docker run -v \$(pwd):/workspace ubuntu:20.04 /workspace/make_appimage.sh"
 echo ""
 echo "To run: ./dist/$APPIMAGE_NAME"
-echo ""
-echo "Note: This AppImage requires Vulkan drivers to be installed on the target system."

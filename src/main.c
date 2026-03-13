@@ -43,10 +43,8 @@ const uint32_t HEIGHT = 600;
 
 #define MAX_FRAMES_IN_FLIGHT 2
 
-// TODO: figure out a way to toggle this from CMake
-#define VALIDATION_LAYERS
-
-#ifdef VALIDATION_LAYERS
+// Validation layers can be enabled/disabled via CMake with -DENABLE_VALIDATION_LAYERS=ON/OFF
+#ifdef ENABLE_VALIDATION_LAYERS
 const bool enable_validation_layers = true;
 #else
 const bool enable_validation_layers = false;

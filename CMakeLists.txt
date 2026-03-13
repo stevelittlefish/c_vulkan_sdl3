@@ -5,6 +5,16 @@ project(VulkanTest
 	DESCRIPTION "Vulkan Test App"
 	LANGUAGES C)
 
+# Option to enable validation layers (default: OFF for release builds)
+option(ENABLE_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
+
+if(ENABLE_VALIDATION_LAYERS)
+	message(STATUS "Validation layers: ENABLED")
+	add_compile_definitions(ENABLE_VALIDATION_LAYERS)
+else()
+	message(STATUS "Validation layers: DISABLED")
+endif()
+
 # Function to find the latest Vulkan SDK version in a given directory - needed for good old Windows
 function(find_latest_vulkan_sdk base_path output_var)
     file(GLOB SDK_VERSIONS "${base_path}/*")
